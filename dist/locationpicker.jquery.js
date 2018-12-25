@@ -1,4 +1,4 @@
-/*! jquery-locationpicker - v0.1.16 - 2017-10-02 */
+/*! jquery-locationpicker - v0.1.16 - 2018-12-25 */
 (function($) {
     function GMapContext(domElement, options) {
         var _map = new google.maps.Map(domElement, options);
@@ -10,6 +10,7 @@
             draggable: options.markerDraggable,
             icon: options.markerIcon !== undefined ? options.markerIcon : undefined
         });
+        var _updating = false;
         return {
             map: _map,
             marker: _marker,
@@ -30,7 +31,8 @@
             },
             settings: options.settings,
             domContainer: domElement,
-            geodecoder: new google.maps.Geocoder()
+            geodecoder: new google.maps.Geocoder(),
+            updating: _updating
         };
     }
     var GmUtility = {
@@ -142,7 +144,11 @@
             inputBinding.longitudeInput.val(currentLocation.longitude).change();
         }
         if (inputBinding.radiusInput) {
-            inputBinding.radiusInput.val(gmapContext.radius).change();
+            if (inputBinding.rangeValueMapping) {
+                inputBinding.radiusInput.val(logPosition(gmapContext.radius, inputBinding)).change();
+            } else {
+                inputBinding.radiusInput.val(gmapContext.radius).change();
+            }
         }
         if (inputBinding.locationNameInput) {
             inputBinding.locationNameInput.val(gmapContext.locationName).change();
@@ -152,7 +158,12 @@
         if (inputBinding) {
             if (inputBinding.radiusInput) {
                 inputBinding.radiusInput.on("change", function(e) {
-                    var radiusInputValue = $(this).val();
+                    var radiusInputValue;
+                    if (inputBinding.rangeValueMapping) {
+                        radiusInputValue = logValue($(this).val(), inputBinding);
+                    } else {
+                        radiusInputValue = $(this).val();
+                    }
                     if (!e.originalEvent || isNaN(radiusInputValue)) {
                         return;
                     }
@@ -245,10 +256,31 @@
         gmapContext.settings.location.latitude = latNew;
         gmapContext.settings.location.longitude = lngNew;
         gmapContext.radius = radiusNew;
+        if ("gestureHandling" in settings) gmapContext.map.setOptions({
+            draggable: settings.gestureHandling
+        });
         GmUtility.setPosition(gmapContext, new google.maps.LatLng(gmapContext.settings.location.latitude, gmapContext.settings.location.longitude), function(context) {
             setupInputListenersInput(gmapContext.settings.inputBinding, gmapContext);
             context.settings.oninitialized($target);
         });
+    }
+    function logValue(position, inputBinding) {
+        var minRange = inputBinding.rangeValueMapping.minRange;
+        var maxRange = inputBinding.rangeValueMapping.maxRange;
+        var minRadius = Math.log(inputBinding.rangeValueMapping.minRadius);
+        var maxRadius = Math.log(inputBinding.rangeValueMapping.maxRadius);
+        var scale = (maxRadius - minRadius) / (maxRange - minRange);
+        var result = Math.exp(minRadius + scale * (position - minRange));
+        return result;
+    }
+    function logPosition(value, inputBinding) {
+        var minRange = inputBinding.rangeValueMapping.minRange;
+        var maxRange = inputBinding.rangeValueMapping.maxRange;
+        var minRadius = Math.log(inputBinding.rangeValueMapping.minRadius);
+        var maxRadius = Math.log(inputBinding.rangeValueMapping.maxRadius);
+        var scale = (maxRadius - minRadius) / (maxRange - minRange);
+        var result = (Math.log(value) - minRadius) / scale + minRange;
+        return result < 0 ? 0 : result;
     }
     $.fn.locationpicker = function(options, params) {
         if (typeof options == "string") {
@@ -322,12 +354,14 @@
                 disableDoubleClickZoom: false,
                 scrollwheel: settings.scrollwheel,
                 streetViewControl: false,
+                fullscreenControl: settings.fullscreenControl,
                 radius: settings.radius,
                 locationName: settings.locationName,
                 settings: settings,
                 autocompleteOptions: settings.autocompleteOptions,
                 addressFormat: settings.addressFormat,
-                draggable: settings.draggable,
+                gestureHandling: settings.gestureHandling,
+                clickableIcons: settings.clickableIcons,
                 markerIcon: settings.markerIcon,
                 markerDraggable: settings.markerDraggable,
                 markerVisible: settings.markerVisible
@@ -338,6 +372,7 @@
                     var currentLocation = GmUtility.locationFromLatLng(gmapContext.location);
                     updateInputValues(gmapContext.settings.inputBinding, gmapContext);
                     context.settings.onchanged.apply(gmapContext.domContainer, [ currentLocation, context.radius, true ]);
+                    gmapContext.updating = false;
                 });
             }
             if (settings.markerInCenter) {
@@ -348,6 +383,11 @@
                     }
                 });
                 gmapContext.map.addListener("idle", function() {
+                    if (gmapContext.updating) {
+                        return;
+                    } else {
+                        gmapContext.updating = true;
+                    }
                     if (!gmapContext.marker.dragging) {
                         displayMarkerWithSelectedArea();
                     }
@@ -382,14 +422,17 @@
             latitudeInput: null,
             longitudeInput: null,
             radiusInput: null,
+            rangeValueMapping: null,
             locationNameInput: null
         },
         enableAutocomplete: false,
         enableAutocompleteBlur: false,
         autocompleteOptions: null,
         addressFormat: "postal_code",
+        fullscreenControl: false,
         enableReverseGeocode: true,
-        draggable: true,
+        gestureHandling: "auto",
+        clickableIcons: false,
         onchanged: function(currentLocation, radius, isMarkerDropped) {},
         onlocationnotfound: function(locationName) {},
         oninitialized: function(component) {},
